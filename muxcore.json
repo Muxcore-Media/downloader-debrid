@@ -1,0 +1,8 @@
+{
+  "id": "downloader-debrid",
+  "name": "Debrid Downloader",
+  "version": "0.1.0",
+  "description": "Real-Debrid / AllDebrid link unrestrict bridge",
+  "roles": ["downloader", "debrid"],
+  "capabilities": ["downloader", "downloader.debrid", "debrid", "settings"]
+}
