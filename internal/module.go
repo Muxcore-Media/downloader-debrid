@@ -2,12 +2,14 @@ package internal
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -17,6 +19,9 @@ import (
 	debridv1 "github.com/Muxcore-Media/downloader-debrid/proto/gen/muxcore/debrid/v1"
 )
 
+// EventPublisher emits download.* domain events (test sink or mesh adapter).
+type EventPublisher func(ctx context.Context, eventType string, payload []byte) error
+
 type Module struct {
 	id       string
 	grpcAddr string
@@ -25,19 +30,26 @@ type Module struct {
 	cfgMu    sync.RWMutex
 	provider debrid.Provider
 	token    string
+	baseURL  string
 	client   *debrid.Client
 
 	grpcSrv *grpc.Server
 	lis     net.Listener
 	httpSrv *http.Server
+
+	pubMu   sync.RWMutex
+	publish EventPublisher
 }
 
 type Config struct {
-	ID       string
-	Provider string
-	Token    string
-	GRPCAddr string
-	HTTPAddr string
+	ID         string
+	Provider   string
+	Token      string
+	BaseURL    string // optional API base override (httptest mocks)
+	GRPCAddr   string
+	HTTPAddr   string
+	Publish    EventPublisher
+	HTTPClient *http.Client
 }
 
 func NewModule(cfg Config) *Module {
@@ -62,6 +74,9 @@ func NewModule(cfg Config) *Module {
 			cfg.Provider = string(debrid.ProviderRealDebrid)
 		}
 	}
+	if v := os.Getenv("DEBRID_API_BASE"); v != "" {
+		cfg.BaseURL = v
+	}
 	if v := os.Getenv("MUXCORE_HTTP_ADDR"); v != "" {
 		cfg.HTTPAddr = v
 	}
@@ -71,14 +86,27 @@ func NewModule(cfg Config) *Module {
 	}
 	m := &Module{
 		id: cfg.ID, grpcAddr: cfg.GRPCAddr, httpAddr: cfg.HTTPAddr,
-		provider: prov, token: cfg.Token,
+		provider: prov, token: cfg.Token, baseURL: cfg.BaseURL,
+		publish: cfg.Publish,
 	}
-	m.rebuildClient()
+	m.rebuildClient(cfg.HTTPClient)
 	return m
 }
 
-func (m *Module) rebuildClient() {
-	m.client = &debrid.Client{Provider: m.provider, Token: m.token}
+func (m *Module) rebuildClient(httpClient *http.Client) {
+	c := &debrid.Client{Provider: m.provider, Token: m.token, BaseURL: m.baseURL}
+	if httpClient != nil {
+		c.HTTPClient = httpClient
+	} else if m.client != nil && m.client.HTTPClient != nil {
+		c.HTTPClient = m.client.HTTPClient
+	}
+	m.client = c
+}
+
+func (m *Module) SetPublisher(p EventPublisher) {
+	m.pubMu.Lock()
+	m.publish = p
+	m.pubMu.Unlock()
 }
 
 func (m *Module) Info() contracts.ModuleInfo {
@@ -144,22 +172,76 @@ func (m *Module) Health(ctx context.Context) error {
 	return err
 }
 
+func (m *Module) configured() error {
+	m.cfgMu.RLock()
+	defer m.cfgMu.RUnlock()
+	if m.token == "" {
+		return fmt.Errorf("debrid unconfigured: set DEBRID_TOKEN (operator opt-in; never required for CI)")
+	}
+	return nil
+}
+
+// OfflineDispatch unrestricts a hoster link against the configured (or mock)
+// debrid API and emits download.completed. Used by offline automation paths.
+func (m *Module) OfflineDispatch(ctx context.Context, link, password string) (debrid.Unrestricted, error) {
+	if err := m.configured(); err != nil {
+		return debrid.Unrestricted{}, err
+	}
+	u, err := m.client.Unrestrict(ctx, link, password)
+	if err != nil {
+		m.publishDownload(contracts.EventDownloadFailed, "", link, "", err.Error())
+		return debrid.Unrestricted{}, err
+	}
+	m.publishDownload(contracts.EventDownloadStarted, u.ID, u.Filename, "", "")
+	m.publishDownload(contracts.EventDownloadCompleted, u.ID, u.Filename, u.Download, "")
+	return u, nil
+}
+
+func (m *Module) publishDownload(eventType, id, name, savePath, errStr string) {
+	m.pubMu.RLock()
+	pub := m.publish
+	m.pubMu.RUnlock()
+	if pub == nil {
+		return
+	}
+	payload, err := json.Marshal(contracts.DownloadEventPayload{
+		ID: id, Name: name, SavePath: savePath, Label: "debrid", Error: errStr,
+	})
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := pub(ctx, eventType, payload); err != nil {
+		slog.Warn("debrid: publish event failed", "type", eventType, "error", err)
+	}
+}
+
 type debridServer struct {
 	debridv1.UnimplementedDebridDownloaderServiceServer
 	m *Module
 }
 
 func (s *debridServer) UnrestrictLink(ctx context.Context, req *debridv1.UnrestrictLinkRequest) (*debridv1.UnrestrictLinkResponse, error) {
-	u, err := s.m.client.Unrestrict(ctx, req.GetLink(), req.GetPassword())
-	if err != nil {
+	if err := s.m.configured(); err != nil {
 		return nil, err
 	}
+	u, err := s.m.client.Unrestrict(ctx, req.GetLink(), req.GetPassword())
+	if err != nil {
+		s.m.publishDownload(contracts.EventDownloadFailed, "", req.GetLink(), "", err.Error())
+		return nil, err
+	}
+	s.m.publishDownload(contracts.EventDownloadStarted, u.ID, u.Filename, "", "")
+	s.m.publishDownload(contracts.EventDownloadCompleted, u.ID, u.Filename, u.Download, "")
 	return &debridv1.UnrestrictLinkResponse{
 		Id: u.ID, Filename: u.Filename, Download: u.Download, Filesize: u.Filesize, Host: u.Host,
 	}, nil
 }
 
 func (s *debridServer) ListDownloads(ctx context.Context, req *debridv1.ListDownloadsRequest) (*debridv1.ListDownloadsResponse, error) {
+	if err := s.m.configured(); err != nil {
+		return &debridv1.ListDownloadsResponse{}, nil
+	}
 	items, err := s.m.client.ListDownloads(ctx, int(req.GetLimit()))
 	if err != nil {
 		return nil, err
@@ -174,6 +256,9 @@ func (s *debridServer) ListDownloads(ctx context.Context, req *debridv1.ListDown
 }
 
 func (s *debridServer) DeleteDownload(ctx context.Context, req *debridv1.DeleteDownloadRequest) (*debridv1.DeleteDownloadResponse, error) {
+	if err := s.m.configured(); err != nil {
+		return nil, err
+	}
 	if err := s.m.client.DeleteDownload(ctx, req.GetId()); err != nil {
 		return nil, err
 	}
@@ -185,9 +270,9 @@ func (s *debridServer) GetCapabilities(_ context.Context, _ *debridv1.GetCapabil
 	prov := string(s.m.provider)
 	s.m.cfgMu.RUnlock()
 	return &debridv1.GetCapabilitiesResponse{
-		Provider:                prov,
-		SupportsUnrestrict:      true,
-		SupportsCloudDownloads:  prov == string(debrid.ProviderRealDebrid),
-		Hosts:                   []string{"*"},
+		Provider:               prov,
+		SupportsUnrestrict:     true,
+		SupportsCloudDownloads: prov == string(debrid.ProviderRealDebrid),
+		Hosts:                  []string{"*"},
 	}, nil
 }

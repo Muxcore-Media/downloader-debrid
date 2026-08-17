@@ -2,50 +2,76 @@ package debrid_test
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/Muxcore-Media/downloader-debrid/internal/debrid"
 )
 
-func TestRealDebridUnrestrict(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/rest/1.0/unrestrict/link", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer tok" {
-			http.Error(w, "auth", 401)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id": "abc", "filename": "file.bin", "download": "https://cdn.example/file.bin",
-			"filesize": 123, "host": "example.com",
-		})
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
+func TestRealDebridUnrestrictListDeleteOffline(t *testing.T) {
+	mock := debrid.NewMockRealDebrid("tok")
+	defer mock.Close()
 
-	// Point Real-Debrid calls at our fake by temporarily using a custom transport via rewritten client methods —
-	// instead, exercise through a thin wrapper: call Unrestrict against real URL won't work.
-	// Use Client with HTTPClient that rewrites host via RoundTripper.
-	c := &debrid.Client{
-		Provider: debrid.ProviderRealDebrid,
-		Token:    "tok",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			req.URL.Scheme = "http"
-			req.URL.Host = srv.Listener.Addr().String()
-			return http.DefaultTransport.RoundTrip(req)
-		})},
-	}
+	c := mock.Client()
 	u, err := c.Unrestrict(context.Background(), "https://host.example/file", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.Download == "" || u.Filename != "file.bin" {
+	if u.Download == "" || u.Filename != "fixture.bin" {
+		t.Fatalf("%+v", u)
+	}
+	list, err := c.ListDownloads(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("list=%+v", list)
+	}
+	if err := c.DeleteDownload(context.Background(), u.ID); err != nil {
+		t.Fatal(err)
+	}
+	list, err = c.ListDownloads(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("after delete: %+v", list)
+	}
+}
+
+func TestAllDebridUnrestrictOffline(t *testing.T) {
+	mock := debrid.NewMockAllDebrid("adtok")
+	defer mock.Close()
+	c := mock.Client()
+	u, err := c.Unrestrict(context.Background(), "https://host.example/x", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Filename != "ad-fixture.bin" || u.Download == "" {
 		t.Fatalf("%+v", u)
 	}
 }
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
+func TestMissingToken(t *testing.T) {
+	c := &debrid.Client{Provider: debrid.ProviderRealDebrid, BaseURL: "http://127.0.0.1:9"}
+	_, err := c.Unrestrict(context.Background(), "https://x", "")
+	if err == nil {
+		t.Fatal("expected token error")
+	}
+}
 
-func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+// Optional live smoke — never runs in CI. Requires DEBRID_LIVE_TEST=1 and DEBRID_TOKEN.
+func TestLiveRealDebridOptional(t *testing.T) {
+	if os.Getenv("DEBRID_LIVE_TEST") != "1" {
+		t.Skip("operator opt-in only: set DEBRID_LIVE_TEST=1 and DEBRID_TOKEN")
+	}
+	tok := os.Getenv("DEBRID_TOKEN")
+	if tok == "" {
+		t.Skip("DEBRID_TOKEN unset")
+	}
+	c := &debrid.Client{Provider: debrid.ProviderRealDebrid, Token: tok}
+	_, err := c.ListDownloads(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+}

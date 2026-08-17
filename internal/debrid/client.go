@@ -18,12 +18,16 @@ type Provider string
 const (
 	ProviderRealDebrid Provider = "realdebrid"
 	ProviderAllDebrid  Provider = "alldebrid"
+
+	defaultRDBase = "https://api.real-debrid.com"
+	defaultADBase = "https://api.alldebrid.com"
 )
 
 // Client is a minimal debrid API facade.
 type Client struct {
 	Provider   Provider
 	Token      string
+	BaseURL    string // optional override for httptest mocks; defaults per provider
 	HTTPClient *http.Client
 }
 
@@ -32,6 +36,16 @@ func (c *Client) http() *http.Client {
 		return c.HTTPClient
 	}
 	return &http.Client{Timeout: 45 * time.Second}
+}
+
+func (c *Client) base() string {
+	if c.BaseURL != "" {
+		return strings.TrimRight(c.BaseURL, "/")
+	}
+	if c.Provider == ProviderAllDebrid {
+		return defaultADBase
+	}
+	return defaultRDBase
 }
 
 // Unrestricted is a resolved direct download.
@@ -87,7 +101,7 @@ func (c *Client) realdebridUnrestrict(ctx context.Context, link, password string
 	if password != "" {
 		form.Set("password", password)
 	}
-	body, err := c.rdDo(ctx, http.MethodPost, "https://api.real-debrid.com/rest/1.0/unrestrict/link", form)
+	body, err := c.rdDo(ctx, http.MethodPost, c.base()+"/rest/1.0/unrestrict/link", form)
 	if err != nil {
 		return Unrestricted{}, err
 	}
@@ -108,7 +122,7 @@ func (c *Client) realdebridUnrestrict(ctx context.Context, link, password string
 }
 
 func (c *Client) realdebridList(ctx context.Context, limit int) ([]Download, error) {
-	u := "https://api.real-debrid.com/rest/1.0/downloads"
+	u := c.base() + "/rest/1.0/downloads"
 	if limit > 0 {
 		u += fmt.Sprintf("?limit=%d", limit)
 	}
@@ -136,7 +150,7 @@ func (c *Client) realdebridList(ctx context.Context, limit int) ([]Download, err
 }
 
 func (c *Client) realdebridDelete(ctx context.Context, id string) error {
-	_, err := c.rdDo(ctx, http.MethodDelete, "https://api.real-debrid.com/rest/1.0/downloads/delete/"+url.PathEscape(id), nil)
+	_, err := c.rdDo(ctx, http.MethodDelete, c.base()+"/rest/1.0/downloads/delete/"+url.PathEscape(id), nil)
 	return err
 }
 
@@ -176,7 +190,7 @@ func (c *Client) alldebridUnrestrict(ctx context.Context, link, password string)
 	if password != "" {
 		q.Set("password", password)
 	}
-	body, err := c.adDo(ctx, "https://api.alldebrid.com/v4/link/unlock?"+q.Encode())
+	body, err := c.adDo(ctx, c.base()+"/v4/link/unlock?"+q.Encode())
 	if err != nil {
 		return Unrestricted{}, err
 	}

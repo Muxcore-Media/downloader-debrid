@@ -18,11 +18,11 @@ func (m *Module) Settings() []contracts.SettingDef {
 		{
 			Key: "provider", Label: "Provider", Type: contracts.SettingTypeSelect,
 			Value: string(m.provider), Options: []string{"realdebrid", "alldebrid"},
-			Description: "Debrid backend", Group: "Connection",
+			Description: "Debrid backend (operator opt-in)", Group: "Connection",
 		},
 		{
 			Key: "token", Label: "API token", Type: contracts.SettingTypeSecret,
-			Value: tok, Description: "Provider API token", Group: "Connection",
+			Value: tok, Description: "Provider API token (operator opt-in; never required for CI)", Group: "Connection",
 		},
 	}
 }
@@ -45,6 +45,6 @@ func (m *Module) UpdateSetting(key, value string) error {
 	default:
 		return fmt.Errorf("unknown setting %q", key)
 	}
-	m.rebuildClient()
+	m.rebuildClient(nil)
 	return nil
 }
