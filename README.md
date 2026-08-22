@@ -29,6 +29,7 @@ Exposes `muxcore.debrid.v1.DebridDownloaderService` and SettingsProvider.
 | `DEBRID_API_BASE` | — | provider default; set to `httptest` URL in tests |
 | gRPC | — | `:9630` |
 | Health | — | `:9631` |
+| VFS HTTP | — | `GET /api/vfs`, `GET /api/vfs/stream?id=` (cloud library list + Range-aware stream proxy) |
 
 ## Build / test
 
