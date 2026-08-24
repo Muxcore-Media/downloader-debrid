@@ -96,6 +96,34 @@ func (c *Client) DeleteDownload(ctx context.Context, id string) error {
 	}
 }
 
+// AddMagnet queues a magnet or torrent URL on Real-Debrid (no-op on AllDebrid v0.1.0).
+func (c *Client) AddMagnet(ctx context.Context, magnetOrURL string) (string, error) {
+	switch c.Provider {
+	case ProviderAllDebrid:
+		return "", fmt.Errorf("alldebrid: magnet add not supported in v0.1.0")
+	default:
+		return c.realdebridAddMagnet(ctx, magnetOrURL)
+	}
+}
+
+func (c *Client) realdebridAddMagnet(ctx context.Context, magnetOrURL string) (string, error) {
+	form := url.Values{"magnet": {magnetOrURL}}
+	body, err := c.rdDo(ctx, http.MethodPost, c.base()+"/rest/1.0/torrents/addMagnet", form)
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", err
+	}
+	if out.ID == "" {
+		return "", fmt.Errorf("real-debrid: empty torrent id")
+	}
+	return out.ID, nil
+}
+
 func (c *Client) realdebridUnrestrict(ctx context.Context, link, password string) (Unrestricted, error) {
 	form := url.Values{"link": {link}}
 	if password != "" {

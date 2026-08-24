@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -141,6 +142,9 @@ func (m *Module) Start(ctx context.Context) error {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("/api/add", m.handleHTTPAdd)
+	mux.HandleFunc("/api/vfs", m.handleVFS)
+	mux.HandleFunc("/api/vfs/stream", m.handleVFSStream)
 	m.httpSrv = &http.Server{Addr: m.httpAddr, Handler: mux}
 	go func() {
 		slog.Info("health listening", "addr", m.httpAddr)
@@ -195,6 +199,55 @@ func (m *Module) OfflineDispatch(ctx context.Context, link, password string) (de
 	m.publishDownload(contracts.EventDownloadStarted, u.ID, u.Filename, "", "")
 	m.publishDownload(contracts.EventDownloadCompleted, u.ID, u.Filename, u.Download, "")
 	return u, nil
+}
+
+// AddCloud queues a magnet, torrent URL, or hoster link on the configured provider.
+func (m *Module) AddCloud(ctx context.Context, link string) (id string, kind string, err error) {
+	if err := m.configured(); err != nil {
+		return "", "", err
+	}
+	trim := strings.TrimSpace(link)
+	if trim == "" {
+		return "", "", fmt.Errorf("link required")
+	}
+	low := strings.ToLower(trim)
+	if strings.HasPrefix(low, "magnet:") || strings.HasSuffix(low, ".torrent") {
+		id, err := m.client.AddMagnet(ctx, trim)
+		if err != nil {
+			m.publishDownload(contracts.EventDownloadFailed, "", trim, "", err.Error())
+			return "", "", err
+		}
+		m.publishDownload(contracts.EventDownloadStarted, id, trim, "", "")
+		return id, "magnet", nil
+	}
+	u, err := m.OfflineDispatch(ctx, trim, "")
+	if err != nil {
+		return "", "", err
+	}
+	return u.ID, "link", nil
+}
+
+func (m *Module) handleHTTPAdd(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Link string `json:"link"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	id, kind, err := m.AddCloud(r.Context(), body.Link)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"id": id, "kind": kind, "status": "queued"})
 }
 
 func (m *Module) publishDownload(eventType, id, name, savePath, errStr string) {
