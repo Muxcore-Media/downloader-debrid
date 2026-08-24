@@ -37,6 +37,19 @@ func (r *recPub) has(typ string) bool {
 	return false
 }
 
+func TestAddMagnetRD(t *testing.T) {
+	mock := debrid.NewMockRealDebrid("ci")
+	defer mock.Close()
+	c := mock.Client()
+	id, err := c.AddMagnet(context.Background(), "magnet:?xt=urn:btih:abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id == "" {
+		t.Fatal("empty id")
+	}
+}
+
 func TestOfflineDispatchRDCompleted(t *testing.T) {
 	mock := debrid.NewMockRealDebrid("ci")
 	defer mock.Close()
@@ -88,6 +101,31 @@ func TestOfflineDispatchADCompleted(t *testing.T) {
 		t.Fatalf("%+v", u)
 	}
 	if !pub.has(contracts.EventDownloadCompleted) {
+		t.Fatalf("events=%+v", pub.evts)
+	}
+}
+
+func TestAddCloudMagnet(t *testing.T) {
+	mock := debrid.NewMockRealDebrid("ci")
+	defer mock.Close()
+	pub := &recPub{}
+	m := internal.NewModule(internal.Config{
+		Provider:   string(debrid.ProviderRealDebrid),
+		Token:      "ci",
+		BaseURL:    mock.URL(),
+		GRPCAddr:   "127.0.0.1:0",
+		HTTPAddr:   "127.0.0.1:0",
+		Publish:    pub.Publish,
+		HTTPClient: mock.Server.Client(),
+	})
+	id, kind, err := m.AddCloud(context.Background(), "magnet:?xt=urn:btih:fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kind != "magnet" || id == "" {
+		t.Fatalf("id=%s kind=%s", id, kind)
+	}
+	if !pub.has(contracts.EventDownloadStarted) {
 		t.Fatalf("events=%+v", pub.evts)
 	}
 }

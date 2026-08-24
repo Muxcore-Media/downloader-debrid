@@ -28,6 +28,7 @@ func NewMockRealDebrid(token string) *MockRealDebrid {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/rest/1.0/unrestrict/link", m.handleUnrestrict)
+	mux.HandleFunc("/rest/1.0/torrents/addMagnet", m.handleAddMagnet)
 	mux.HandleFunc("/rest/1.0/downloads", m.handleList)
 	mux.HandleFunc("/rest/1.0/downloads/delete/", m.handleDelete)
 	m.Server = httptest.NewServer(mux)
@@ -43,6 +44,15 @@ func (m *MockRealDebrid) Client() *Client {
 		Token:      m.Token,
 		BaseURL:    m.URL(),
 		HTTPClient: m.Server.Client(),
+	}
+}
+
+// SetDownloadURL overrides the direct download URL for a mocked download id (VFS tests).
+func (m *MockRealDebrid) SetDownloadURL(id, downloadURL string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if row, ok := m.downloads[id]; ok {
+		row["download"] = downloadURL
 	}
 }
 
@@ -67,6 +77,20 @@ func (m *MockRealDebrid) handleUnrestrict(w http.ResponseWriter, r *http.Request
 	writeJSON(w, row)
 }
 
+func (m *MockRealDebrid) handleAddMagnet(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != "Bearer "+m.Token {
+		http.Error(w, "auth", http.StatusUnauthorized)
+		return
+	}
+	_ = r.ParseForm()
+	magnet := r.Form.Get("magnet")
+	id := "rd-mag-" + strings.TrimPrefix(magnet, "magnet:")
+	if len(id) > 24 {
+		id = id[:24]
+	}
+	writeJSON(w, map[string]string{"id": id})
+}
+
 func (m *MockRealDebrid) handleList(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Authorization") != "Bearer "+m.Token {
 		http.Error(w, "auth", http.StatusUnauthorized)
@@ -76,7 +100,7 @@ func (m *MockRealDebrid) handleList(w http.ResponseWriter, r *http.Request) {
 	rows := make([]map[string]any, 0, len(m.downloads))
 	for _, d := range m.downloads {
 		rows = append(rows, map[string]any{
-			"id": d["id"], "filename": d["filename"], "link": d["link"], "filesize": d["filesize"],
+			"id": d["id"], "filename": d["filename"], "link": d["download"], "filesize": d["filesize"],
 		})
 	}
 	m.mu.Unlock()
