@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/Muxcore-Media/downloader-debrid/internal/debrid"
@@ -73,7 +74,12 @@ func (m *Module) handleVFSStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "download link unavailable", http.StatusBadGateway)
 		return
 	}
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, direct, nil)
+	parsed, ok := allowedUpstreamURL(direct)
+	if !ok {
+		http.Error(w, "invalid upstream URL", http.StatusBadGateway)
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, parsed.String(), http.NoBody)
 	if err != nil {
 		http.Error(w, "proxy build failed", http.StatusInternalServerError)
 		return
@@ -86,7 +92,7 @@ func (m *Module) handleVFSStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	for _, h := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"} {
 		if v := resp.Header.Get(h); v != "" {
 			w.Header().Set(h, v)
@@ -110,4 +116,21 @@ func (m *Module) findDownload(ctx context.Context, id string) (debrid.Download, 
 		}
 	}
 	return debrid.Download{}, fmt.Errorf("download %q not found", id)
+}
+
+func allowedUpstreamURL(raw string) (*url.URL, bool) {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return nil, false
+	}
+	switch parsed.Scheme {
+	case "https":
+		return parsed, true
+	case "http":
+		host := parsed.Hostname()
+		if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+			return parsed, true
+		}
+	}
+	return nil, false
 }

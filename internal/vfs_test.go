@@ -45,7 +45,7 @@ func TestVFSListAndStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("vfs list status %d", res.StatusCode)
 	}
@@ -65,7 +65,7 @@ func TestVFSListAndStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer streamRes.Body.Close()
+	defer func() { _ = streamRes.Body.Close() }()
 	body, _ := io.ReadAll(streamRes.Body)
 	if string(body) != "debrid-vfs-bytes" {
 		t.Fatalf("stream body %q", body)
