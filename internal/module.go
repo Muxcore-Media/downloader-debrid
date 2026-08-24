@@ -24,33 +24,34 @@ import (
 type EventPublisher func(ctx context.Context, eventType string, payload []byte) error
 
 type Module struct {
-	id       string
-	grpcAddr string
-	httpAddr string
-
-	cfgMu    sync.RWMutex
-	provider debrid.Provider
-	token    string
-	baseURL  string
-	client   *debrid.Client
-
 	grpcSrv *grpc.Server
 	lis     net.Listener
 	httpSrv *http.Server
+	client  *debrid.Client
 
-	pubMu   sync.RWMutex
+	cfgMu sync.RWMutex
+	pubMu sync.RWMutex
+
 	publish EventPublisher
+
+	id       string
+	grpcAddr string
+	httpAddr string
+	token    string
+	baseURL  string
+	provider debrid.Provider
 }
 
 type Config struct {
-	ID         string
-	Provider   string
-	Token      string
-	BaseURL    string // optional API base override (httptest mocks)
-	GRPCAddr   string
-	HTTPAddr   string
-	Publish    EventPublisher
 	HTTPClient *http.Client
+	Publish    EventPublisher
+
+	ID       string
+	Provider string
+	Token    string
+	BaseURL  string
+	GRPCAddr string
+	HTTPAddr string
 }
 
 func NewModule(cfg Config) *Module {

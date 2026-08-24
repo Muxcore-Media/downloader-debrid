@@ -10,8 +10,8 @@ import (
 
 // MockRealDebrid is an httptest stand-in for api.real-debrid.com (no real tokens).
 type MockRealDebrid struct {
-	Token  string
 	Server *httptest.Server
+	Token  string
 
 	mu        sync.Mutex
 	downloads map[string]map[string]any
@@ -35,8 +35,9 @@ func NewMockRealDebrid(token string) *MockRealDebrid {
 	return m
 }
 
-func (m *MockRealDebrid) URL() string  { return m.Server.URL }
-func (m *MockRealDebrid) Close()       { m.Server.Close() }
+func (m *MockRealDebrid) URL() string { return m.Server.URL }
+
+func (m *MockRealDebrid) Close() { m.Server.Close() }
 
 func (m *MockRealDebrid) Client() *Client {
 	return &Client{
@@ -121,8 +122,8 @@ func (m *MockRealDebrid) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 // MockAllDebrid is an httptest stand-in for api.alldebrid.com.
 type MockAllDebrid struct {
-	Token  string
 	Server *httptest.Server
+	Token  string
 }
 
 func NewMockAllDebrid(token string) *MockAllDebrid {

@@ -25,10 +25,10 @@ const (
 
 // Client is a minimal debrid API facade.
 type Client struct {
+	HTTPClient *http.Client
 	Provider   Provider
 	Token      string
 	BaseURL    string // optional override for httptest mocks; defaults per provider
-	HTTPClient *http.Client
 }
 
 func (c *Client) http() *http.Client {
@@ -50,20 +50,20 @@ func (c *Client) base() string {
 
 // Unrestricted is a resolved direct download.
 type Unrestricted struct {
+	Filesize int64
 	ID       string
 	Filename string
 	Download string
-	Filesize int64
 	Host     string
 }
 
 // Download is a cloud download / unrestricted entry.
 type Download struct {
+	Filesize int64
 	ID       string
 	Filename string
 	Status   string
 	Link     string
-	Filesize int64
 }
 
 // Unrestrict resolves a hoster link to a direct URL.
@@ -134,10 +134,10 @@ func (c *Client) realdebridUnrestrict(ctx context.Context, link, password string
 		return Unrestricted{}, err
 	}
 	var out struct {
+		Filesize int64  `json:"filesize"`
 		ID       string `json:"id"`
 		Filename string `json:"filename"`
 		Download string `json:"download"`
-		Filesize int64  `json:"filesize"`
 		Host     string `json:"host"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
@@ -202,7 +202,7 @@ func (c *Client) rdDo(ctx context.Context, method, endpoint string, form url.Val
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, err
@@ -224,16 +224,16 @@ func (c *Client) alldebridUnrestrict(ctx context.Context, link, password string)
 	}
 	var out struct {
 		Status string `json:"status"`
-		Data   struct {
+		Error  struct {
+			Message string `json:"message"`
+		} `json:"error"`
+		Data struct {
+			Filesize int64  `json:"filesize"`
+			ID       string `json:"id"`
 			Link     string `json:"link"`
 			Filename string `json:"filename"`
 			Host     string `json:"host"`
-			Filesize int64  `json:"filesize"`
-			ID       string `json:"id"`
 		} `json:"data"`
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
 		return Unrestricted{}, err
@@ -261,7 +261,7 @@ func (c *Client) adDo(ctx context.Context, endpoint string) ([]byte, error) {
 	if c.Token == "" {
 		return nil, fmt.Errorf("debrid token required")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +269,7 @@ func (c *Client) adDo(ctx context.Context, endpoint string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, err
