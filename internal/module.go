@@ -114,8 +114,8 @@ func (m *Module) SetPublisher(p EventPublisher) {
 func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID: m.id, Name: "Debrid Downloader", Version: "0.1.0",
-		Roles:       []string{"downloader", "debrid"},
-		Description: "Real-Debrid / AllDebrid link unrestrict + downloads",
+		Roles:        []string{"downloader", "debrid"},
+		Description:  "Real-Debrid / AllDebrid link unrestrict + downloads",
 		Capabilities: []string{"downloader", "downloader.debrid", "debrid", "settings"},
 		HTTPAddr:     m.grpcAddr,
 	}

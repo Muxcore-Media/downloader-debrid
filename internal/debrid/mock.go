@@ -162,7 +162,7 @@ func (m *MockAllDebrid) handleUnlock(w http.ResponseWriter, r *http.Request) {
 		"status": "success",
 		"data": map[string]any{
 			"id": "ad-1", "filename": "ad-fixture.bin",
-			"link": "https://cdn.fixture.test/ad-fixture.bin",
+			"link":     "https://cdn.fixture.test/ad-fixture.bin",
 			"filesize": int64(2048), "host": "fixture.test",
 		},
 	})
