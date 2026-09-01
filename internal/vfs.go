@@ -3,13 +3,10 @@ package internal
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
-
-	"github.com/Muxcore-Media/downloader-debrid/internal/debrid"
 )
 
 type vfsItem struct {
@@ -32,27 +29,58 @@ func (m *Module) handleVFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := 50
-	items, err := m.client.ListDownloads(r.Context(), limit)
+	items, err := m.listVFSItems(r.Context(), limit)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error(), "items": []vfsItem{}})
 		return
 	}
-	out := make([]vfsItem, 0, len(items))
-	for _, it := range items {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"items": items, "total": len(items)})
+}
+
+func (m *Module) listVFSItems(ctx context.Context, limit int) ([]vfsItem, error) {
+	downloads, err := m.client.ListDownloads(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, limit)
+	out := make([]vfsItem, 0, limit)
+	appendItem := func(id, filename, status string, filesize int64) {
+		if id == "" {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
 		out = append(out, vfsItem{
-			ID: it.ID, Filename: it.Filename, Status: it.Status, Filesize: it.Filesize,
-			Stream: "/api/vfs/stream?id=" + it.ID,
+			ID: id, Filename: filename, Status: status, Filesize: filesize,
+			Stream: "/api/vfs/stream?id=" + url.QueryEscape(id),
 		})
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"items": out, "total": len(out)})
+	for _, it := range downloads {
+		appendItem(it.ID, it.Filename, it.Status, it.Filesize)
+	}
+	torrents, err := m.client.ListTorrents(ctx, limit)
+	if err == nil {
+		for _, t := range torrents {
+			if t.Status != "downloaded" && t.Status != "Ready" && t.Status != "Downloaded" {
+				continue
+			}
+			appendItem(t.ID, t.Filename, t.Status, t.Filesize)
+		}
+	}
+	return out, nil
 }
 
 func (m *Module) handleVFSStream(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !m.requireHTTPAuth(w, r) {
 		return
 	}
 	if err := m.configured(); err != nil {
@@ -64,7 +92,7 @@ func (m *Module) handleVFSStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id required", http.StatusBadRequest)
 		return
 	}
-	dl, err := m.findDownload(r.Context(), id)
+	dl, err := m.client.ResolveDownload(r.Context(), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -87,7 +115,7 @@ func (m *Module) handleVFSStream(w http.ResponseWriter, r *http.Request) {
 	if rng := r.Header.Get("Range"); rng != "" {
 		req.Header.Set("Range", rng)
 	}
-	resp, err := m.client.HTTPClient.Do(req)
+	resp, err := m.client.Do(req)
 	if err != nil {
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 		return
@@ -103,19 +131,6 @@ func (m *Module) handleVFSStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = io.Copy(w, resp.Body)
-}
-
-func (m *Module) findDownload(ctx context.Context, id string) (debrid.Download, error) {
-	items, err := m.client.ListDownloads(ctx, 100)
-	if err != nil {
-		return debrid.Download{}, err
-	}
-	for _, it := range items {
-		if it.ID == id {
-			return it, nil
-		}
-	}
-	return debrid.Download{}, fmt.Errorf("download %q not found", id)
 }
 
 func allowedUpstreamURL(raw string) (*url.URL, bool) {

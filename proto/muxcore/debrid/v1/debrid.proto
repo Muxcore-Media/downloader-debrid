@@ -10,6 +10,7 @@ service DebridDownloaderService {
   rpc ListDownloads(ListDownloadsRequest) returns (ListDownloadsResponse);
   rpc DeleteDownload(DeleteDownloadRequest) returns (DeleteDownloadResponse);
   rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
+  rpc AddCloud(AddCloudRequest) returns (AddCloudResponse);
 }
 
 message UnrestrictLinkRequest {
@@ -56,4 +57,14 @@ message GetCapabilitiesResponse {
   bool supports_unrestrict = 2;
   bool supports_cloud_downloads = 3;
   repeated string hosts = 4;
+}
+
+message AddCloudRequest {
+  string link = 1;
+}
+
+message AddCloudResponse {
+  string id = 1;
+  string kind = 2;
+  string status = 3;
 }

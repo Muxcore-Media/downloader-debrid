@@ -8,7 +8,7 @@ MuxCore sidecar module (`downloader-debrid`). Workspace deploy and SSH: [`../AGE
 |-------|-------|
 | Directory | `downloader-debrid` |
 | Capabilities | see muxcore.json |
-| Contracts | none declared |
+| Contracts | `muxcore.debrid.v1.DebridDownloaderService` |
 
 ## Agent rules
 
@@ -22,5 +22,5 @@ MuxCore sidecar module (`downloader-debrid`). Workspace deploy and SSH: [`../AGE
 
 ```bash
 cd downloader-debrid
-go test ./...
+nix-shell -p go --run 'go test ./...'
 ```
