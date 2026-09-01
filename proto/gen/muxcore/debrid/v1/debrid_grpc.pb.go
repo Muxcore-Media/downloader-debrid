@@ -23,6 +23,7 @@ const (
 	DebridDownloaderService_ListDownloads_FullMethodName   = "/muxcore.debrid.v1.DebridDownloaderService/ListDownloads"
 	DebridDownloaderService_DeleteDownload_FullMethodName  = "/muxcore.debrid.v1.DebridDownloaderService/DeleteDownload"
 	DebridDownloaderService_GetCapabilities_FullMethodName = "/muxcore.debrid.v1.DebridDownloaderService/GetCapabilities"
+	DebridDownloaderService_AddCloud_FullMethodName        = "/muxcore.debrid.v1.DebridDownloaderService/AddCloud"
 )
 
 // DebridDownloaderServiceClient is the client API for DebridDownloaderService service.
@@ -35,6 +36,7 @@ type DebridDownloaderServiceClient interface {
 	ListDownloads(ctx context.Context, in *ListDownloadsRequest, opts ...grpc.CallOption) (*ListDownloadsResponse, error)
 	DeleteDownload(ctx context.Context, in *DeleteDownloadRequest, opts ...grpc.CallOption) (*DeleteDownloadResponse, error)
 	GetCapabilities(ctx context.Context, in *GetCapabilitiesRequest, opts ...grpc.CallOption) (*GetCapabilitiesResponse, error)
+	AddCloud(ctx context.Context, in *AddCloudRequest, opts ...grpc.CallOption) (*AddCloudResponse, error)
 }
 
 type debridDownloaderServiceClient struct {
@@ -85,6 +87,16 @@ func (c *debridDownloaderServiceClient) GetCapabilities(ctx context.Context, in 
 	return out, nil
 }
 
+func (c *debridDownloaderServiceClient) AddCloud(ctx context.Context, in *AddCloudRequest, opts ...grpc.CallOption) (*AddCloudResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddCloudResponse)
+	err := c.cc.Invoke(ctx, DebridDownloaderService_AddCloud_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DebridDownloaderServiceServer is the server API for DebridDownloaderService service.
 // All implementations must embed UnimplementedDebridDownloaderServiceServer
 // for forward compatibility.
@@ -95,6 +107,7 @@ type DebridDownloaderServiceServer interface {
 	ListDownloads(context.Context, *ListDownloadsRequest) (*ListDownloadsResponse, error)
 	DeleteDownload(context.Context, *DeleteDownloadRequest) (*DeleteDownloadResponse, error)
 	GetCapabilities(context.Context, *GetCapabilitiesRequest) (*GetCapabilitiesResponse, error)
+	AddCloud(context.Context, *AddCloudRequest) (*AddCloudResponse, error)
 	mustEmbedUnimplementedDebridDownloaderServiceServer()
 }
 
@@ -116,6 +129,9 @@ func (UnimplementedDebridDownloaderServiceServer) DeleteDownload(context.Context
 }
 func (UnimplementedDebridDownloaderServiceServer) GetCapabilities(context.Context, *GetCapabilitiesRequest) (*GetCapabilitiesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetCapabilities not implemented")
+}
+func (UnimplementedDebridDownloaderServiceServer) AddCloud(context.Context, *AddCloudRequest) (*AddCloudResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddCloud not implemented")
 }
 func (UnimplementedDebridDownloaderServiceServer) mustEmbedUnimplementedDebridDownloaderServiceServer() {
 }
@@ -211,6 +227,24 @@ func _DebridDownloaderService_GetCapabilities_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DebridDownloaderService_AddCloud_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddCloudRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DebridDownloaderServiceServer).AddCloud(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DebridDownloaderService_AddCloud_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DebridDownloaderServiceServer).AddCloud(ctx, req.(*AddCloudRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DebridDownloaderService_ServiceDesc is the grpc.ServiceDesc for DebridDownloaderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -233,6 +267,10 @@ var DebridDownloaderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetCapabilities",
 			Handler:    _DebridDownloaderService_GetCapabilities_Handler,
+		},
+		{
+			MethodName: "AddCloud",
+			Handler:    _DebridDownloaderService_AddCloud_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

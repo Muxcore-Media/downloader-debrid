@@ -15,43 +15,49 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
+	"github.com/Muxcore-Media/core/sdk/go/client"
 	modulesdk "github.com/Muxcore-Media/core/sdk/go/module"
 	"github.com/Muxcore-Media/downloader-debrid/internal/debrid"
 	debridv1 "github.com/Muxcore-Media/downloader-debrid/proto/gen/muxcore/debrid/v1"
 )
 
+const moduleVersion = "0.1.2"
+
+const httpReadHeaderTimeout = 10 * time.Second
+
 // EventPublisher emits download.* domain events (test sink or mesh adapter).
 type EventPublisher func(ctx context.Context, eventType string, payload []byte) error
 
 type Module struct {
-	grpcSrv *grpc.Server
-	lis     net.Listener
-	httpSrv *http.Server
-	client  *debrid.Client
-
-	cfgMu sync.RWMutex
-	pubMu sync.RWMutex
-
-	publish EventPublisher
-
-	id       string
-	grpcAddr string
-	httpAddr string
-	token    string
-	baseURL  string
-	provider debrid.Provider
+	grpcSrv   *grpc.Server
+	grpcLis   net.Listener
+	httpSrv   *http.Server
+	httpLis   net.Listener
+	client    *debrid.Client
+	mc        *client.Client
+	cfgMu     sync.RWMutex
+	pubMu     sync.RWMutex
+	publish   EventPublisher
+	id        string
+	grpcAddr  string
+	httpAddr  string
+	httpToken string
+	token     string
+	baseURL   string
+	provider  debrid.Provider
 }
 
 type Config struct {
 	HTTPClient *http.Client
 	Publish    EventPublisher
 
-	ID       string
-	Provider string
-	Token    string
-	BaseURL  string
-	GRPCAddr string
-	HTTPAddr string
+	ID        string
+	Provider  string
+	Token     string
+	BaseURL   string
+	GRPCAddr  string
+	HTTPAddr  string
+	HTTPToken string
 }
 
 func NewModule(cfg Config) *Module {
@@ -62,7 +68,7 @@ func NewModule(cfg Config) *Module {
 		cfg.GRPCAddr = ":9630"
 	}
 	if cfg.HTTPAddr == "" {
-		cfg.HTTPAddr = ":9631"
+		cfg.HTTPAddr = "127.0.0.1:9631"
 	}
 	if v := os.Getenv("DEBRID_PROVIDER"); v != "" {
 		cfg.Provider = v
@@ -79,8 +85,13 @@ func NewModule(cfg Config) *Module {
 	if v := os.Getenv("DEBRID_API_BASE"); v != "" {
 		cfg.BaseURL = v
 	}
-	if v := os.Getenv("MUXCORE_HTTP_ADDR"); v != "" {
+	if v := os.Getenv("DEBRID_HTTP_ADDR"); v != "" {
 		cfg.HTTPAddr = v
+	} else if v := os.Getenv("MUXCORE_HTTP_ADDR"); v != "" {
+		cfg.HTTPAddr = v
+	}
+	if v := os.Getenv("DEBRID_HTTP_TOKEN"); v != "" {
+		cfg.HTTPToken = v
 	}
 	prov := debrid.Provider(cfg.Provider)
 	if prov == "" {
@@ -88,7 +99,7 @@ func NewModule(cfg Config) *Module {
 	}
 	m := &Module{
 		id: cfg.ID, grpcAddr: cfg.GRPCAddr, httpAddr: cfg.HTTPAddr,
-		provider: prov, token: cfg.Token, baseURL: cfg.BaseURL,
+		httpToken: cfg.HTTPToken, provider: prov, token: cfg.Token, baseURL: cfg.BaseURL,
 		publish: cfg.Publish,
 	}
 	m.rebuildClient(cfg.HTTPClient)
@@ -113,31 +124,49 @@ func (m *Module) SetPublisher(p EventPublisher) {
 
 func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
-		ID: m.id, Name: "Debrid Downloader", Version: "0.1.0",
+		ID: m.id, Name: "Debrid Downloader", Version: moduleVersion,
 		Roles:        []string{"downloader", "debrid"},
-		Description:  "Real-Debrid / AllDebrid link unrestrict + downloads",
+		Description:  "Real-Debrid / AllDebrid link unrestrict + cloud downloads",
 		Capabilities: []string{"downloader", "downloader.debrid", "debrid", "settings"},
-		HTTPAddr:     m.grpcAddr,
+		HTTPAddr:     m.httpAddr,
 	}
 }
 
-func (m *Module) Init(ctx context.Context) error { return nil }
+func (m *Module) Init(_ context.Context) error {
+	m.cfgMu.RLock()
+	httpAddr := m.httpAddr
+	httpToken := m.httpToken
+	m.cfgMu.RUnlock()
+	if !IsLoopbackBind(httpAddr) && httpToken == "" {
+		return fmt.Errorf("DEBRID_HTTP_TOKEN is required when DEBRID_HTTP_ADDR=%q is not loopback-only", httpAddr)
+	}
+	return nil
+}
 
 func (m *Module) Start(ctx context.Context) error {
-	lis, err := net.Listen("tcp", m.grpcAddr)
+	grpcLis, err := net.Listen("tcp", m.grpcAddr)
 	if err != nil {
 		return fmt.Errorf("listen gRPC %s: %w", m.grpcAddr, err)
 	}
-	m.lis = lis
+	m.grpcLis = grpcLis
+	m.grpcAddr = grpcLis.Addr().String()
 	m.grpcSrv = grpc.NewServer()
 	debridv1.RegisterDebridDownloaderServiceServer(m.grpcSrv, &debridServer{m: m})
 	modulesdk.RegisterSettings(m.grpcSrv, m.id, m)
 	go func() {
 		slog.Info("debrid gRPC listening", "addr", m.grpcAddr)
-		if err := m.grpcSrv.Serve(lis); err != nil {
+		if err := m.grpcSrv.Serve(grpcLis); err != nil {
 			slog.Error("gRPC serve", "error", err)
 		}
 	}()
+
+	httpLis, err := net.Listen("tcp", m.httpAddr)
+	if err != nil {
+		return fmt.Errorf("listen HTTP %s: %w", m.httpAddr, err)
+	}
+	m.httpLis = httpLis
+	m.httpAddr = httpLis.Addr().String()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -146,13 +175,18 @@ func (m *Module) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/add", m.handleHTTPAdd)
 	mux.HandleFunc("/api/vfs", m.handleVFS)
 	mux.HandleFunc("/api/vfs/stream", m.handleVFSStream)
-	m.httpSrv = &http.Server{Addr: m.httpAddr, Handler: mux}
+	m.httpSrv = &http.Server{
+		Addr:              m.httpAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+	}
 	go func() {
 		slog.Info("health listening", "addr", m.httpAddr)
-		if err := m.httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := m.httpSrv.Serve(httpLis); err != nil && err != http.ErrServerClosed {
 			slog.Error("health serve", "error", err)
 		}
 	}()
+	go m.dialCore(context.Background())
 	return nil
 }
 
@@ -163,7 +197,46 @@ func (m *Module) Stop(ctx context.Context) error {
 	if m.httpSrv != nil {
 		_ = m.httpSrv.Shutdown(ctx)
 	}
+	if m.mc != nil {
+		_ = m.mc.Close()
+	}
 	return nil
+}
+
+func (m *Module) GRPCAddr() string {
+	if m.grpcLis != nil {
+		return m.grpcLis.Addr().String()
+	}
+	return m.grpcAddr
+}
+
+func (m *Module) HTTPListenAddr() string {
+	if m.httpLis != nil {
+		return m.httpLis.Addr().String()
+	}
+	return m.httpAddr
+}
+
+func (m *Module) dialCore(ctx context.Context) {
+	meshAddr := os.Getenv("MUXCORE_GRPC_ADDR")
+	if meshAddr == "" {
+		return
+	}
+	insecureMode := os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") == "true" || os.Getenv("MUXCORE_GRPC_INSECURE") == "true"
+	var opts []client.Option
+	if insecureMode {
+		opts = append(opts, client.WithInsecure())
+	}
+	c, err := client.Dial(meshAddr, opts...)
+	if err != nil {
+		slog.Warn("debrid: dial core failed", "error", err)
+		return
+	}
+	m.mc = c
+	m.SetPublisher(func(ctx context.Context, eventType string, payload []byte) error {
+		return c.Events.Publish(ctx, eventType, m.id, payload)
+	})
+	slog.Info("debrid: connected to core mesh", "addr", meshAddr)
 }
 
 func (m *Module) Health(ctx context.Context) error {
@@ -173,8 +246,7 @@ func (m *Module) Health(ctx context.Context) error {
 	if tok == "" {
 		return nil
 	}
-	_, err := m.client.ListDownloads(ctx, 1)
-	return err
+	return m.client.CheckAuth(ctx)
 }
 
 func (m *Module) configured() error {
@@ -219,6 +291,7 @@ func (m *Module) AddCloud(ctx context.Context, link string) (id string, kind str
 			return "", "", err
 		}
 		m.publishDownload(contracts.EventDownloadStarted, id, trim, "", "")
+		m.publishDownload(contracts.EventDownloadCompleted, id, trim, "", "")
 		return id, "magnet", nil
 	}
 	u, err := m.OfflineDispatch(ctx, trim, "")
@@ -231,6 +304,9 @@ func (m *Module) AddCloud(ctx context.Context, link string) (id string, kind str
 func (m *Module) handleHTTPAdd(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !m.requireHTTPAuth(w, r) {
 		return
 	}
 	var body struct {
@@ -326,7 +402,15 @@ func (s *debridServer) GetCapabilities(_ context.Context, _ *debridv1.GetCapabil
 	return &debridv1.GetCapabilitiesResponse{
 		Provider:               prov,
 		SupportsUnrestrict:     true,
-		SupportsCloudDownloads: prov == string(debrid.ProviderRealDebrid),
+		SupportsCloudDownloads: true,
 		Hosts:                  []string{"*"},
 	}, nil
+}
+
+func (s *debridServer) AddCloud(ctx context.Context, req *debridv1.AddCloudRequest) (*debridv1.AddCloudResponse, error) {
+	id, kind, err := s.m.AddCloud(ctx, req.GetLink())
+	if err != nil {
+		return nil, err
+	}
+	return &debridv1.AddCloudResponse{Id: id, Kind: kind, Status: "queued"}, nil
 }
