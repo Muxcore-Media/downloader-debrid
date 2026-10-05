@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Muxcore-Media/core/sdk/go/module/meshtls"
+
 	"google.golang.org/grpc"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
@@ -151,7 +153,12 @@ func (m *Module) Start(ctx context.Context) error {
 	}
 	m.grpcLis = grpcLis
 	m.grpcAddr = grpcLis.Addr().String()
-	m.grpcSrv = grpc.NewServer()
+	srv, err := meshtls.NewServer()
+	if err != nil {
+		_ = m.grpcLis.Close()
+		return fmt.Errorf("gRPC mesh TLS: %w", err)
+	}
+	m.grpcSrv = srv
 	debridv1.RegisterDebridDownloaderServiceServer(m.grpcSrv, &debridServer{m: m})
 	modulesdk.RegisterSettings(m.grpcSrv, m.id, m)
 	go func() {
