@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.2] - 2026-10-05
+
+### Changed
+- CI runs on GitHub-hosted runners from the umbrella template; retired-origin workflows removed.
+- Dependencies resolve from published GitHub tags (no filesystem `replace`); requires core v0.6.0.
+
 ## [v0.1.2] — 2026-08-31
 
 ### Added
@@ -7,7 +13,7 @@
 - Real-Debrid magnet `selectFiles` + poll; AllDebrid magnet upload/status/delete
 - VFS torrent listing + `ResolveDownload`; stream proxy uses client default HTTP
 - `AddCloud` gRPC; HTTP auth gate (`DEBRID_HTTP_TOKEN` / loopback bind)
-- Forgejo `golangci-lint` CI job; `ReadHeaderTimeout` on HTTP server
+- `golangci-lint` CI job; `ReadHeaderTimeout` on HTTP server
 
 ## [v0.1.1] — 2026-08-10
 
