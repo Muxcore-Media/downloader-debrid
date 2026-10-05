@@ -43,7 +43,7 @@ func (c *Client) http() *http.Client {
 
 // Do performs an HTTP request using the client's configured or default HTTP client.
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
-	return c.http().Do(req)
+	return c.http().Do(req) //nolint:gosec // G704: callers (see vfs allowedUpstreamURL) validate the target URL before calling Do
 }
 
 func (c *Client) base() string {
@@ -58,29 +58,29 @@ func (c *Client) base() string {
 
 // Unrestricted is a resolved direct download.
 type Unrestricted struct {
-	Filesize int64
 	ID       string
 	Filename string
 	Download string
 	Host     string
+	Filesize int64
 }
 
 // Download is a cloud download / unrestricted entry.
 type Download struct {
-	Filesize int64
 	ID       string
 	Filename string
 	Status   string
 	Link     string
+	Filesize int64
 }
 
 // Torrent is a cloud torrent job on Real-Debrid / AllDebrid.
 type Torrent struct {
-	Filesize int64
 	ID       string
 	Filename string
 	Status   string
 	Links    []string
+	Filesize int64
 }
 
 // Unrestrict resolves a hoster link to a direct URL.
@@ -292,11 +292,11 @@ func (c *Client) realdebridUnrestrict(ctx context.Context, link, password string
 		return Unrestricted{}, err
 	}
 	var out struct {
-		Filesize int64  `json:"filesize"`
 		ID       string `json:"id"`
 		Filename string `json:"filename"`
 		Download string `json:"download"`
 		Host     string `json:"host"`
+		Filesize int64  `json:"filesize"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
 		return Unrestricted{}, err
@@ -392,8 +392,8 @@ func (c *Client) alldebridAddMagnet(ctx context.Context, magnetOrURL string) (st
 		} `json:"error"`
 		Data struct {
 			Magnets []struct {
-				ID   int    `json:"id"`
 				Name string `json:"name"`
+				ID   int    `json:"id"`
 			} `json:"magnets"`
 		} `json:"data"`
 	}
@@ -452,8 +452,8 @@ func (c *Client) alldebridMagnetStatus(ctx context.Context, id string) (string, 
 		Data struct {
 			Magnets []struct {
 				Status struct {
-					Code int    `json:"code"`
 					Text string `json:"text"`
+					Code int    `json:"code"`
 				} `json:"status"`
 			} `json:"magnets"`
 		} `json:"data"`
@@ -481,13 +481,13 @@ func (c *Client) alldebridListTorrents(ctx context.Context, limit int) ([]Torren
 		Status string `json:"status"`
 		Data   struct {
 			Magnets []struct {
-				ID     int    `json:"id"`
 				Name   string `json:"name"`
-				Size   int64  `json:"size"`
 				Status struct {
 					Text string `json:"text"`
 				} `json:"status"`
 				Links []string `json:"links"`
+				ID    int      `json:"id"`
+				Size  int64    `json:"size"`
 			} `json:"magnets"`
 		} `json:"data"`
 	}
@@ -526,11 +526,11 @@ func (c *Client) alldebridUnrestrict(ctx context.Context, link, password string)
 			Message string `json:"message"`
 		} `json:"error"`
 		Data struct {
-			Filesize int64  `json:"filesize"`
 			ID       string `json:"id"`
 			Link     string `json:"link"`
 			Filename string `json:"filename"`
 			Host     string `json:"host"`
+			Filesize int64  `json:"filesize"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {

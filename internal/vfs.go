@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-type vfsItem struct {
+type vfsItem struct { //nolint:govet // JSON response shape; field order is kept as the documented wire order
 	ID       string `json:"id"`
 	Filename string `json:"filename"`
 	Status   string `json:"status"`

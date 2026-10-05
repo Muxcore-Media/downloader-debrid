@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -29,22 +30,22 @@ const httpReadHeaderTimeout = 10 * time.Second
 type EventPublisher func(ctx context.Context, eventType string, payload []byte) error
 
 type Module struct {
-	grpcSrv   *grpc.Server
-	grpcLis   net.Listener
-	httpSrv   *http.Server
 	httpLis   net.Listener
-	client    *debrid.Client
-	mc        *client.Client
-	cfgMu     sync.RWMutex
-	pubMu     sync.RWMutex
+	grpcLis   net.Listener
 	publish   EventPublisher
+	client    *debrid.Client
+	grpcSrv   *grpc.Server
+	mc        *client.Client
+	httpSrv   *http.Server
 	id        string
 	grpcAddr  string
 	httpAddr  string
-	httpToken string
 	token     string
 	baseURL   string
 	provider  debrid.Provider
+	httpToken string
+	pubMu     sync.RWMutex
+	cfgMu     sync.RWMutex
 }
 
 type Config struct {
@@ -144,7 +145,8 @@ func (m *Module) Init(_ context.Context) error {
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	grpcLis, err := net.Listen("tcp", m.grpcAddr)
+	var lc net.ListenConfig
+	grpcLis, err := lc.Listen(ctx, "tcp", m.grpcAddr)
 	if err != nil {
 		return fmt.Errorf("listen gRPC %s: %w", m.grpcAddr, err)
 	}
@@ -155,12 +157,12 @@ func (m *Module) Start(ctx context.Context) error {
 	modulesdk.RegisterSettings(m.grpcSrv, m.id, m)
 	go func() {
 		slog.Info("debrid gRPC listening", "addr", m.grpcAddr)
-		if err := m.grpcSrv.Serve(grpcLis); err != nil {
-			slog.Error("gRPC serve", "error", err)
+		if serveErr := m.grpcSrv.Serve(grpcLis); serveErr != nil {
+			slog.Error("gRPC serve", "error", serveErr)
 		}
 	}()
 
-	httpLis, err := net.Listen("tcp", m.httpAddr)
+	httpLis, err := lc.Listen(ctx, "tcp", m.httpAddr)
 	if err != nil {
 		return fmt.Errorf("listen HTTP %s: %w", m.httpAddr, err)
 	}
@@ -182,11 +184,11 @@ func (m *Module) Start(ctx context.Context) error {
 	}
 	go func() {
 		slog.Info("health listening", "addr", m.httpAddr)
-		if err := m.httpSrv.Serve(httpLis); err != nil && err != http.ErrServerClosed {
+		if err := m.httpSrv.Serve(httpLis); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("health serve", "error", err)
 		}
 	}()
-	go m.dialCore(context.Background())
+	go m.dialCore(context.WithoutCancel(ctx))
 	return nil
 }
 
@@ -266,18 +268,18 @@ func (m *Module) OfflineDispatch(ctx context.Context, link, password string) (de
 	}
 	u, err := m.client.Unrestrict(ctx, link, password)
 	if err != nil {
-		m.publishDownload(contracts.EventDownloadFailed, "", link, "", err.Error())
+		m.publishDownload(ctx, contracts.EventDownloadFailed, "", link, "", err.Error())
 		return debrid.Unrestricted{}, err
 	}
-	m.publishDownload(contracts.EventDownloadStarted, u.ID, u.Filename, "", "")
-	m.publishDownload(contracts.EventDownloadCompleted, u.ID, u.Filename, u.Download, "")
+	m.publishDownload(ctx, contracts.EventDownloadStarted, u.ID, u.Filename, "", "")
+	m.publishDownload(ctx, contracts.EventDownloadCompleted, u.ID, u.Filename, u.Download, "")
 	return u, nil
 }
 
 // AddCloud queues a magnet, torrent URL, or hoster link on the configured provider.
-func (m *Module) AddCloud(ctx context.Context, link string) (id string, kind string, err error) {
-	if err := m.configured(); err != nil {
-		return "", "", err
+func (m *Module) AddCloud(ctx context.Context, link string) (id, kind string, err error) {
+	if cfgErr := m.configured(); cfgErr != nil {
+		return "", "", cfgErr
 	}
 	trim := strings.TrimSpace(link)
 	if trim == "" {
@@ -285,14 +287,14 @@ func (m *Module) AddCloud(ctx context.Context, link string) (id string, kind str
 	}
 	low := strings.ToLower(trim)
 	if strings.HasPrefix(low, "magnet:") || strings.HasSuffix(low, ".torrent") {
-		id, err := m.client.AddMagnet(ctx, trim)
-		if err != nil {
-			m.publishDownload(contracts.EventDownloadFailed, "", trim, "", err.Error())
-			return "", "", err
+		magnetID, addErr := m.client.AddMagnet(ctx, trim)
+		if addErr != nil {
+			m.publishDownload(ctx, contracts.EventDownloadFailed, "", trim, "", addErr.Error())
+			return "", "", addErr
 		}
-		m.publishDownload(contracts.EventDownloadStarted, id, trim, "", "")
-		m.publishDownload(contracts.EventDownloadCompleted, id, trim, "", "")
-		return id, "magnet", nil
+		m.publishDownload(ctx, contracts.EventDownloadStarted, magnetID, trim, "", "")
+		m.publishDownload(ctx, contracts.EventDownloadCompleted, magnetID, trim, "", "")
+		return magnetID, "magnet", nil
 	}
 	u, err := m.OfflineDispatch(ctx, trim, "")
 	if err != nil {
@@ -327,7 +329,7 @@ func (m *Module) handleHTTPAdd(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"id": id, "kind": kind, "status": "queued"})
 }
 
-func (m *Module) publishDownload(eventType, id, name, savePath, errStr string) {
+func (m *Module) publishDownload(ctx context.Context, eventType, id, name, savePath, errStr string) {
 	m.pubMu.RLock()
 	pub := m.publish
 	m.pubMu.RUnlock()
@@ -340,7 +342,8 @@ func (m *Module) publishDownload(eventType, id, name, savePath, errStr string) {
 	if err != nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Publish even if the caller's ctx is already cancelled (e.g. failure events).
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if err := pub(ctx, eventType, payload); err != nil {
 		slog.Warn("debrid: publish event failed", "type", eventType, "error", err)
@@ -358,11 +361,11 @@ func (s *debridServer) UnrestrictLink(ctx context.Context, req *debridv1.Unrestr
 	}
 	u, err := s.m.client.Unrestrict(ctx, req.GetLink(), req.GetPassword())
 	if err != nil {
-		s.m.publishDownload(contracts.EventDownloadFailed, "", req.GetLink(), "", err.Error())
+		s.m.publishDownload(ctx, contracts.EventDownloadFailed, "", req.GetLink(), "", err.Error())
 		return nil, err
 	}
-	s.m.publishDownload(contracts.EventDownloadStarted, u.ID, u.Filename, "", "")
-	s.m.publishDownload(contracts.EventDownloadCompleted, u.ID, u.Filename, u.Download, "")
+	s.m.publishDownload(ctx, contracts.EventDownloadStarted, u.ID, u.Filename, "", "")
+	s.m.publishDownload(ctx, contracts.EventDownloadCompleted, u.ID, u.Filename, u.Download, "")
 	return &debridv1.UnrestrictLinkResponse{
 		Id: u.ID, Filename: u.Filename, Download: u.Download, Filesize: u.Filesize, Host: u.Host,
 	}, nil
@@ -370,7 +373,7 @@ func (s *debridServer) UnrestrictLink(ctx context.Context, req *debridv1.Unrestr
 
 func (s *debridServer) ListDownloads(ctx context.Context, req *debridv1.ListDownloadsRequest) (*debridv1.ListDownloadsResponse, error) {
 	if err := s.m.configured(); err != nil {
-		return &debridv1.ListDownloadsResponse{}, nil
+		return &debridv1.ListDownloadsResponse{}, nil //nolint:nilerr // unconfigured backend reports an empty list, not an RPC error
 	}
 	items, err := s.m.client.ListDownloads(ctx, int(req.GetLimit()))
 	if err != nil {

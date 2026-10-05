@@ -11,12 +11,11 @@ import (
 
 // MockRealDebrid is an httptest stand-in for api.real-debrid.com (no real tokens).
 type MockRealDebrid struct {
-	Server *httptest.Server
-	Token  string
-
-	mu        sync.Mutex
+	Server    *httptest.Server
 	downloads map[string]map[string]any
 	torrents  map[string]map[string]any
+	Token     string
+	mu        sync.Mutex
 }
 
 // NewMockRealDebrid starts a mock RD API. Token is the Bearer value accepted.
@@ -204,11 +203,10 @@ func (m *MockRealDebrid) handleTorrentDelete(w http.ResponseWriter, r *http.Requ
 
 // MockAllDebrid is an httptest stand-in for api.alldebrid.com.
 type MockAllDebrid struct {
-	Server *httptest.Server
-	Token  string
-
-	mu      sync.Mutex
+	Server  *httptest.Server
 	magnets map[string]map[string]any
+	Token   string
+	mu      sync.Mutex
 	nextID  int
 }
 
