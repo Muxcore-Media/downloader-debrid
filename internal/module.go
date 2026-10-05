@@ -18,11 +18,10 @@ import (
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"github.com/Muxcore-Media/core/sdk/go/client"
 	modulesdk "github.com/Muxcore-Media/core/sdk/go/module"
+	manifest "github.com/Muxcore-Media/downloader-debrid"
 	"github.com/Muxcore-Media/downloader-debrid/internal/debrid"
 	debridv1 "github.com/Muxcore-Media/downloader-debrid/proto/gen/muxcore/debrid/v1"
 )
-
-const moduleVersion = "0.1.2"
 
 const httpReadHeaderTimeout = 10 * time.Second
 
@@ -125,7 +124,7 @@ func (m *Module) SetPublisher(p EventPublisher) {
 
 func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
-		ID: m.id, Name: "Debrid Downloader", Version: moduleVersion,
+		ID: m.id, Name: "Debrid Downloader", Version: modulesdk.ManifestVersion(manifest.ManifestJSON),
 		Roles:        []string{"downloader", "debrid"},
 		Description:  "Real-Debrid / AllDebrid link unrestrict + cloud downloads",
 		Capabilities: []string{"downloader", "downloader.debrid", "debrid", "settings"},
